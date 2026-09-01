@@ -240,10 +240,11 @@ function pc_load_data()
 				if ($spc < 0 && isset($st['h'])) {
 					$spc = (float)$st['h'] * 3600.0 / $qty; // compat: h total antigo
 				}
-				if ($wid <= 0 || $spc <= 0) {
+				$buy = (isset($st['buy']) ? (int)$st['buy'] : 0);
+				if ($wid <= 0 || ($spc <= 0 && !$buy)) {
 					continue;
 				}
-				$clean[] = array('wid' => $wid, 'spc' => $spc, 'sec' => $spc * $qty, 'op' => (isset($st['op']) ? trim($st['op']) : ''));
+				$clean[] = array('wid' => $wid, 'spc' => $spc, 'sec' => $spc * $qty, 'op' => (isset($st['op']) ? trim($st['op']) : ''), 'buy' => $buy ? 1 : 0);
 			}
 			$moSteps[$mid] = $clean;
 		}
@@ -543,7 +544,7 @@ function pc_schedule($EQUIPE, $moWsSec, $dayStart, $dayEnd, $CAP_H_PER_DAY, $AUS
 		}
 	}
 
-	$SHARED = array(1 => 1, 2 => 1, 7 => 1);
+	$SHARED = array(1 => 1, 2 => 1, 3 => 1, 6 => 1, 7 => 1);
 	$bDays = pc_bdays($dayStart, $dayEnd);
 	if (empty($bDays)) {
 		$bDays[] = $dayStart;
@@ -830,6 +831,7 @@ function pc_calc($EQUIPE, $mo, $moWsSec, $wsNames, $wsTotalSec, $CAP_H_PER_DAY, 
 			'h' => round($s['h'], 2),
 			'ref' => $m['ref'],
 			'prod' => $m['label'],
+			'qty' => $m['qty'],
 		);
 	}
 

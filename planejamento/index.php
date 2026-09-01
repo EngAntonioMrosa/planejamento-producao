@@ -144,9 +144,10 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['cfg'])) {
 				if ($spc < 0 && isset($st['h'])) {
 					$spc = (float)$st['h']; // compat: h total antigo
 				}
-				if ($wid > 0 && $spc > 0) {
+				$buy = isset($st['buy']) ? (int)$st['buy'] : 0;
+				if ($wid > 0 && ($spc > 0 || $buy)) {
 					$op = isset($st['op']) ? trim($st['op']) : '';
-					$list[] = array('wid' => $wid, 'spc' => round($spc, 3), 'op' => $op);
+					$list[] = array('wid' => $wid, 'spc' => round($spc, 3), 'op' => $op, 'buy' => $buy ? 1 : 0);
 				}
 			}
 			if (!empty($list)) {
@@ -174,9 +175,9 @@ if (isset($_GET['export']) && $_GET['export'] === 'sched') {
 	header('Content-Type: text/csv; charset=utf-8');
 	header('Content-Disposition: attachment; filename="cronograma_planejamento.csv"');
 	$out = fopen('php://output', 'w');
-	fputcsv($out, array('dia', 'operador', 'op', 'produto', 'posto', 'horas'));
+	fputcsv($out, array('dia', 'operador', 'op', 'produto', 'posto', 'qtd', 'horas'));
 	foreach ($C['sched'] as $s) {
-		fputcsv($out, array($s['ts'], $s['op'], $s['ref'], $s['prod'], $s['ws'], $s['h']));
+		fputcsv($out, array($s['ts'], $s['op'], $s['ref'], $s['prod'], $s['ws'], (isset($s['qty']) ? $s['qty'] : ''), $s['h']));
 	}
 	fputcsv($out, array());
 	fputcsv($out, array('total h', $C['totSched']));
@@ -240,7 +241,11 @@ print '<div class="pc-panel" id="tab-op" style="display:none">
 
 // ---------------- Cronograma ----------------
 print '<div class="pc-panel" id="tab-cron" style="display:none">
-	<p><a class="butAction" href="?export=sched" target="_blank" rel="noopener">Exportar cronograma (CSV)</a></p>
+	<p><a class="butAction" href="?export=sched" target="_blank" rel="noopener">Exportar cronograma (CSV)</a>
+	<button class="butAction" id="btn_cron_full" type="button">⛶ Abrir em tela inteira</button></p>
+	<div id="cron-fullscreen-exit" style="display:none;position:sticky;top:0;z-index:20;background:#fff;padding:8px 0">
+		<button class="butAction" id="btn_cron_exit" type="button">✕ Fechar tela inteira</button>
+	</div>
 	<div class="pc-card"><h3>Linha do tempo (dia a dia) por operador</h3><div id="htGantt">' . $H['gantt'] . '</div></div>
 	<div class="pc-card" style="margin-top:14px"><h3>Detalhe previsto dia a dia</h3><div id="htSched">' . $H['schedTab'] . '</div></div></div>';
 
@@ -248,9 +253,9 @@ print '<div class="pc-panel" id="tab-cron" style="display:none">
 print '<div class="pc-panel" id="tab-seq" style="display:none">
 	<div class="pc-grid2">
 		<div class="pc-card"><h3>Ordem de fabricação (arraste para definir a prioridade)</h3>
-			<p class="opacitymedium" style="font-size:12px">A ordem de cima para baixo é a sequência em que cada MO é fabricada. Arraste e solte para reordenar; o cronograma atualiza na hora. Os itens sem marcador seguem a ordem automática no fim.</p>
+			<p class="opacitymedium" style="font-size:12px">A ordem de cima para baixo é a sequência em que cada MO é fabricada. Arraste e solte para reordenar. Os itens sem marcador seguem a ordem automática no fim. Clique em <b>Salvar ordem</b> para aplicar.</p>
 			<div id="seqList"></div>
-			<p style="margin-top:8px"><button class="butAction" id="btn_seq_auto" type="button">Voltar para ordem automática</button></p>
+			<p style="margin-top:8px"><button class="butAction" id="btn_save_seq" type="button">💾 Salvar ordem</button> <button class="butAction" id="btn_seq_auto" type="button">Voltar para ordem automática</button></p>
 		</div>
 		<div class="pc-card"><h3>Resultado no tempo (operações por máquina)</h3><div id="seqGantt"></div></div>
 	</div>
@@ -258,9 +263,9 @@ print '<div class="pc-panel" id="tab-seq" style="display:none">
 
 // ---------------- Etapas (operações por MO + operador definido) ----------------
 print '<div class="pc-panel" id="tab-etp" style="display:none">
-	<p class="opacitymedium" style="font-size:12px">Defina as etapas (operações) de cada ordem de fabricação num fluxo visual. Em cada etapa você escolhe o <b>posto</b>, o <b>operador</b> (vazio = automático) e o tempo em <b>segundos por peça</b>. O sistema calcula o total da etapa = s/pç × quantidade e monta as datas. Arraste os cartões para reordenar o fluxo. Se a MO tiver etapas configuradas, elas substituem a BOM; as alterações recalculam na hora.</p>
+	<p class="opacitymedium" style="font-size:12px">Defina as etapas (operações) de cada ordem de fabricação num fluxo visual. Em cada etapa você escolhe o <b>posto</b>, o <b>operador</b> (vazio = automático) e o tempo em <b>segundos por peça</b>. O sistema calcula o total da etapa = s/pç × quantidade e monta as datas. Arraste os cartões para reordenar o fluxo. Se a MO tiver etapas configuradas, elas substituem a BOM; clique em <b>Salvar etapas</b> para aplicar.</p>
 	<div class="pc-card"><h3>Etapas por ordem de fabricação</h3><div id="etpList"></div>
-		<p style="margin-top:10px"><button class="butAction" id="btn_etp_limpar" type="button">Limpar etapas customizadas (usar BOM em todas)</button></p>
+		<p style="margin-top:10px"><button class="butAction" id="btn_save_etp" type="button">💾 Salvar etapas</button> <button class="butAction" id="btn_etp_limpar" type="button">Limpar etapas customizadas (usar BOM em todas)</button></p>
 	</div></div>';
 
 // ---------------- Materiais ----------------
@@ -269,6 +274,7 @@ print '<div class="pc-panel" id="tab-mat" style="display:none">
 
 // ---------------- Configuração ----------------
 print '<div class="pc-panel" id="tab-cfg" style="display:none">
+	<p><button class="butAction" id="btn_save_cfg" type="button">💾 Salvar alterações</button> <span class="opacitymedium">Alterações só são aplicadas ao clicar em Salvar.</span></p>
 	<div class="pc-card"><h3>Eficiência de produção</h3><div id="htCfgEff">' . $H['cfgEff'] . '</div></div>
 	<div class="pc-card"><h3>Equipe (horas/dia e postos habilitados)</h3><div id="htCfgEquipe">' . $H['cfgEquipe'] . '</div></div>
 	<div class="pc-card" style="margin-top:14px"><h3>Ausências / férias por operador (aaaa-mm-dd separados por vírgula; dia inteiro)</h3><div id="htCfgAus">' . $H['cfgAus'] . '</div></div>
@@ -375,6 +381,10 @@ button.mini.add{color:#2b7a3b;border-color:#bcdcc4}
 .etp-buy{width:16px;height:16px;accent-color:#2b7a3b}
 .etp-fnode.etp-buy{background:#f0fff4;border-color:#bcdcc4}
 .etp-fnode.etp-buy .etp-tot{color:#2b7a3b}
+@keyframes etpFlash{0%{box-shadow:0 0 0 0 rgba(43,122,59,.5)}70%{box-shadow:0 0 0 12px rgba(43,122,59,0)}100%{box-shadow:0 0 0 0 transparent}}
+.etp-fnode.etp-flash{animation:etpFlash .6s ease-out}
+@keyframes msgPulse{0%{transform:scale(1);opacity:.6}50%{transform:scale(1.05);opacity:1}100%{transform:scale(1);opacity:1}}
+.pc-msg.pc-ok{animation:msgPulse .5s ease;color:#1a6b2f}
 .muted{color:#8a93a6;font-style:italic}
 CSS;
 }
@@ -475,6 +485,7 @@ function pc_js()
 			if(!byMac[w]){byMac[w]={label:s.ws,ops:[]};macOrder.push(w);}
 			byMac[w].ops.push(s);
 		});
+		_rebuildTotKH();
 		// order machines by total hours desc
 		var totByMac={};PLAN.sched.forEach(function(s){totByMac[s.wid]=(totByMac[s.wid]||0)+s.h;});
 		macOrder.sort(function(a,b){return (totByMac[b]||0)-(totByMac[a]||0);});
@@ -508,7 +519,7 @@ function pc_js()
 					var startX=i*cellW+2+cum*cellW;
 					var wdt=Math.max(8,Math.min(cellW-4,(op.h/capDay)*cellW));
 					if(startX>=i*cellW+cellW){return;}
-					html+='<div class="bar has" title="'+esc(op.ref+' · '+op.op+' · '+op.h+'h · '+ts)+'" style="left:'+startX+'px;width:'+wdt+'px;background:'+c+'"></div>';
+					html+='<div class="bar has" title="'+esc(op.ref+' · qtd '+pcQtyPeriod(op.ref,op.wid,op.h)+' · '+op.op+' · '+op.h+'h · '+ts)+'" style="left:'+startX+'px;width:'+wdt+'px;background:'+c+'"></div>';
 					cum+=frac;
 				});
 			});
@@ -523,6 +534,23 @@ function pc_js()
 		return (m&&m.capDay)?m.capDay:8;
 	}
 	function todayISO(){var d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+	// quantidade produzida por período: proporcional às horas alocadas naquele dia
+	// (qtd do período = qtd total da MO × horas do dia ÷ horas totais da MO no posto)
+	var _totKH=null;
+	function _rebuildTotKH(){
+		_totKH={};
+		PLAN.sched.forEach(function(s){
+			var k=s.ref+'|'+s.wid;
+			_totKH[k]=(_totKH[k]||0)+s.h;
+		});
+	}
+	function pcQtyPeriod(ref,wid,h){
+		if(!_totKH){_rebuildTotKH();}
+		var tot=_totKH[ref+'|'+wid]||0;
+		if(!tot){return 0;}
+		var s=PLAN.sched.filter(function(x){return x.ref===ref&&x.wid===wid;})[0];
+		return Math.round((s?s.qty:0)*h/tot);
+	}
 	function seqEsqHtml(){
 		// fila por posto: para cada máquina, sequência de MOs agrupada por dia
 		var byMac={},order=[];
@@ -532,7 +560,7 @@ function pc_js()
 		var seen={};
 		PLAN.sched.forEach(function(s){
 			if(!byMac[s.wid].rows.length||byMac[s.wid].rows[byMac[s.wid].rows.length-1].ts!==s.ts){byMac[s.wid].rows.push({ts:s.ts,refs:[]});}
-			byMac[s.wid].rows[byMac[s.wid].rows.length-1].refs.push(s.ref+' ('+s.h+'h)');
+			byMac[s.wid].rows[byMac[s.wid].rows.length-1].refs.push(s.ref+' ×'+pcQtyPeriod(s.ref,s.wid,s.h)+' ('+s.h+'h)');
 		});
 		order.sort(function(a,b){return byMac[a].label.localeCompare(byMac[b].label);});
 		var html='<table class="pc-tabla"><tr><th>Posto</th><th>Dia → MOs</th></tr>';
@@ -597,10 +625,10 @@ function pc_js()
 	}
 	function commitSeq(){
 		window.__pcSeq=seqOrder();
-		window.PcSave(true);
+		markDirty();
 	}
 	function seqAuto(){
-		SEQ_STATE=null;window.__pcSeq=[];renderSeq();window.PcSave(true);
+		SEQ_STATE=null;window.__pcSeq=[];renderSeq();markDirty();
 	}
 
 	// ================== Etapas de fabricação + operador por etapa ==================
@@ -694,13 +722,13 @@ function pc_js()
 		var moEl=document.querySelector('.etp-mo[data-mid="'+mid+'"]');
 		if(moEl){var b=moEl.querySelector('.etp-body');if(b){b.innerHTML=flowHtml(mid);}}
 	}
-	function etpCommit(mid){window.__pcStepsETP=collectSteps();window.PcSave(true);}
+	function etpCommit(mid){window.__pcStepsETP=collectSteps();markDirty();}
 	function collectSteps(){
 		var out={};
 		(PLAN.seqList||[]).forEach(function(it){
 			if(ETP_BOM[it.mid]){return;} // usa BOM: não salva custom
-			var rows=etpRows(it.mid).filter(function(r){return r.wid&&etpSpcVal(r.spc)>0;})
-				.map(function(r){return {wid:parseInt(r.wid,10),spc:etpSpcVal(r.spc),op:r.op||''};});
+			var rows=etpRows(it.mid).filter(function(r){return r.wid&&(etpSpcVal(r.spc)>0||etpBuyVal(r.buy));})
+            .map(function(r){return {wid:parseInt(r.wid,10),spc:etpSpcVal(r.spc),op:r.op||"",buy:etpBuyVal(r.buy)};});
 			if(rows.length){out[it.mid]=rows;}
 		});
 		return out;
@@ -738,30 +766,42 @@ function pc_js()
 		}
 	}
 	function etpInput(e){
-		var t=e.target;
-		if(!t||!t.hasAttribute)return;
-		var moEl=t.closest('.etp-mo');if(!moEl)return;
-		var mid=parseInt(moEl.getAttribute('data-mid'),10);
-		var idx=parseInt(String(t.getAttribute('data-e-wid')||t.getAttribute('data-e-spc')||t.getAttribute('data-e-op')||'-1'),10);
-		if(idx<0)return;
-		var rows=etpRows(mid);
-		if(!rows[idx])return;
-		if(t.hasAttribute('data-e-wid')){rows[idx].wid=t.value;}
-		else if(t.hasAttribute('data-e-spc')){
-			var spc=parseFloat(String(t.value).replace(',','.'));
-			rows[idx].spc=(isFinite(spc)&&spc>0)?spc:'';
-			// atualiza o total exibido deste nó
-			var nodeEl=t.closest('.etp-fnode');if(nodeEl){
-				var qty=etpQty(mid);
-				var tot=(etpSpcVal(rows[idx].spc)*qty)/3600;
-				var totEl=nodeEl.querySelector('.etp-tot');if(totEl){totEl.textContent='= '+tot.toFixed(2)+' h';}
-			}
-		}
-		else if(t.hasAttribute('data-e-op')){rows[idx].op=t.value;}
-		delete ETP_BOM[mid];
-		// salva só no change (blur), não a cada tecla
-		if(e.type==='change'){etpCommit(mid);}
-	}
+    var t=e.target;
+    if(!t||!t.hasAttribute)return;
+    var moEl=t.closest('.etp-mo');if(!moEl)return;
+    var mid=parseInt(moEl.getAttribute('data-mid'),10);
+    var idx=parseInt(String(t.getAttribute('data-e-wid')||t.getAttribute('data-e-spc')||t.getAttribute('data-e-op')||t.getAttribute('data-e-buy')||'-1'),10);
+    if(idx<0)return;
+    var rows=etpRows(mid);
+    if(!rows[idx])return;
+    if(t.hasAttribute('data-e-wid')){rows[idx].wid=t.value;}
+    else if(t.hasAttribute('data-e-spc')){
+        var spc=parseFloat(String(t.value).replace(',','.'));
+        rows[idx].spc=(isFinite(spc)&&spc>0)?spc:'';
+        var nodeEl=t.closest('.etp-fnode');if(nodeEl){
+            var qty=etpQty(mid);
+            var tot=(etpSpcVal(rows[idx].spc)*qty)/3600;
+            var totEl=nodeEl.querySelector('.etp-tot');if(totEl){totEl.textContent='= '+tot.toFixed(2)+' h';}
+        }
+    }
+    else if(t.hasAttribute('data-e-op')){rows[idx].op=t.value;}
+    else if(t.hasAttribute('data-e-buy')){
+        rows[idx].buy=etpBuyVal(t.checked?1:0);
+        var nodeEl=t.closest('.etp-fnode');
+        if(nodeEl){
+            var qty=etpQty(mid);
+            var buy=etpBuyVal(rows[idx].buy);
+            var totH=buy?0:(etpSpcVal(rows[idx].spc)*qty)/3600;
+            var totEl=nodeEl.querySelector('.etp-tot'); if(totEl){totEl.textContent='= '+totH.toFixed(2)+' h';}
+            var spcEl=nodeEl.querySelector('.etp-spc'); if(spcEl){spcEl.style.opacity=buy?'0.45':'';}
+            nodeEl.classList.toggle('etp-buy',buy);
+            nodeEl.classList.remove('etp-flash');void nodeEl.offsetWidth;nodeEl.classList.add('etp-flash');
+        }
+        etpCommit(mid);
+    }
+    delete ETP_BOM[mid];
+    if(e.type==='change'){etpCommit(mid);}
+}
 	function etpDragStart(e){
 		var t=e.target&&e.target.closest?e.target.closest('.etp-fnode'):null;
 		if(!t)return;
@@ -808,7 +848,18 @@ function pc_js()
 			b.classList.add('active');
 			var panels=document.querySelectorAll('.pc-panel');
 			for(var k=0;k<panels.length;k++){panels[k].style.display='none';}
-			document.getElementById('tab-'+b.getAttribute('data-tab')).style.display='';
+			var panelId='tab-'+b.getAttribute('data-tab');
+			document.getElementById(panelId).style.display='';
+			// re-render charts when tab becomes visible (needed for Chart.js on hidden canvases)
+			if(panelId==='tab-mac' || panelId==='tab-op' || panelId==='tab-dash'){
+				setTimeout(function(){renderCharts();}, 50);
+			}
+			if(panelId==='tab-cron' || panelId==='tab-seq'){
+				setTimeout(function(){renderSeq();}, 50);
+			}
+			if(panelId==='tab-etp'){
+				setTimeout(function(){renderSteps();}, 50);
+			}
 		});})(tabs[i]);}
 	};
 	function debounce(fn,ms){var t;return function(){var a=arguments,c=this;clearTimeout(t);t=setTimeout(function(){fn.apply(c,a);},ms);};}
@@ -860,30 +911,68 @@ function pc_js()
 			var res;
 			try{res=JSON.parse(o.t);}catch(e){throw new Error('Resposta inválida: '+o.t.slice(0,160));}
 			PLAN=res.calc;refreshCharts(PLAN);SEQ_STATE=null;renderSeq();refresh(res.html);
+			msg.classList.add('pc-ok');void msg.offsetWidth;msg.classList.remove('pc-ok');setTimeout(function(){msg.classList.add('pc-ok');},10);
 			msg.textContent='Salvo e recalculado ✓ — término '+PLAN.endTs+' ('+PLAN.totSched+' h, sobra '+PLAN.leftOver+' h)';
 		})
 		.catch(function(e){msg.textContent='Erro: '+e;});
 	},800);
+	function markDirty(){
+		var msg=document.getElementById('pc-msg');
+		if(msg){msg.textContent='Alterações não salvas — clique em Salvar.';msg.classList.remove('pc-ok');}
+	}
+	function manualSave(){
+		var msg=document.getElementById('pc-msg');
+		if(msg){msg.textContent='Salvando…';}
+		window.PcSave(true);
+	}
 	function bindInputs(){
-		var sel='input[data-eqh],input[data-opequ],input[data-tp],input[data-wsat],input[data-wsun],input[data-aus],#ferias_txt';
-		// eventos delegados: sobrevivem à troca de innerHTML após salvar
-		document.addEventListener('input',function(e){var n=e.target;if(n&&n.matches&&n.matches(sel)){window.PcSave();}});
-		document.addEventListener('change',function(e){var n=e.target;if(n&&n.matches&&n.matches(sel)){window.PcSave();}});
-		document.getElementById('btn_reset_equipe').addEventListener('click',function(){
-			fetch('index.php?reset=equipe',{method:'POST',credentials:'same-origin'}).then(function(){location.reload();});
+		// Botões de salvar explícitos (salvamento automático DESATIVADO).
+		// Usa delegação para sobreviver à troca de innerHTML após salvar.
+		document.addEventListener('click',function(e){
+			var b=e.target&&e.target.closest?e.target.closest('button'):null;
+			if(!b||!b.id){return;}
+			if(b.id==='btn_save_cfg'||b.id==='btn_save_seq'||b.id==='btn_save_etp'){manualSave();}
+			else if(b.id==='btn_reset_equipe'){
+				if(!confirm('Restaurar equipe padrão? As alterações não salvas serão perdidas.')){return;}
+				fetch('index.php?reset=equipe',{method:'POST',credentials:'same-origin'}).then(function(){location.reload();});
+			}
+			else if(b.id==='btn_limp_tempos'){
+				if(!confirm('Limpar todos os tempos (usar BOM) e salvar?')){return;}
+				var tp=document.querySelectorAll('input[data-tp]');
+				for(var i=0;i<tp.length;i++){tp[i].value='';}
+				manualSave();
+			}
+			else if(b.id==='btn_seq_auto'){seqAuto();}
+			else if(b.id==='btn_etp_limpar'){
+				if(!confirm('Limpar etapas customizadas (usar BOM em todas)?')){return;}
+				ETP_EDIT={};window.__pcStepsETP={};
+				renderSteps();
+				markDirty();
+			}
+			else if(b.id==='btn_cron_full'){
+				var p=document.getElementById('tab-cron');
+				if(p.requestFullscreen){p.requestFullscreen();}
+				else if(p.webkitRequestFullscreen){p.webkitRequestFullscreen();}
+				else{window.open(location.href.split('/custom/')[0]+location.pathname+'#cron','_blank');}
+			}
+			else if(b.id==='btn_cron_exit'){
+				if(document.exitFullscreen){document.exitFullscreen();}
+				else if(document.webkitExitFullscreen){document.webkitExitFullscreen();}
+			}
 		});
-		document.getElementById('btn_limp_tempos').addEventListener('click',function(){
-			var tp=document.querySelectorAll('input[data-tp]');
-			for(var i=0;i<tp.length;i++){tp[i].value='';}
-			window.PcSave();
-		});
-		var bseq=document.getElementById('btn_seq_auto');
-		if(bseq){bseq.addEventListener('click',function(){seqAuto();});}
-		var betp=document.getElementById('btn_etp_limpar');
-		if(betp){betp.addEventListener('click',function(){
-			// limpa todas as etapas customizadas (usa BOM em todas)
-			ETP_EDIT={};window.__pcStepsETP={};window.PcSave(true);
-		});}
+		// marca "não salvo" ao editar configurações (sem salvar sozinho)
+		var sel='input[data-eqh],input[data-opequ],input[data-tp],input[data-wsat],input[data-wsun],input[data-aus],input[data-eff],#ferias_txt';
+		document.addEventListener('input',function(e){var n=e.target;if(n&&n.matches&&n.matches(sel)){markDirty();}});
+		document.addEventListener('change',function(e){var n=e.target;if(n&&n.matches&&n.matches(sel)){markDirty();}});
+		function upFull(){
+			var p=document.getElementById('tab-cron');
+			var isFull=document.fullscreenElement||document.webkitFullscreenElement;
+			var exit=document.getElementById('cron-fullscreen-exit');
+			if(exit){exit.style.display=(isFull&&p&&isFull.id==='tab-cron')?'':'none';}
+			if(p){p.style.background=isFull?'#fff':'';p.style.padding=isFull?'18px':'';}
+		}
+		document.addEventListener('fullscreenchange',upFull);
+		document.addEventListener('webkitfullscreenchange',upFull);
 	}
 	document.addEventListener('DOMContentLoaded',function(){window.PcInit();bindInputs();});
 	if(document.readyState==='interactive'||document.readyState==='complete'){setTimeout(function(){window.PcInit();bindInputs();},50);}
@@ -968,7 +1057,7 @@ function pc_html($C)
 	list($gantt, $legend) = pc_gantt($C);
 
 	// ---- tabela cronograma ----
-	$schedTab = '<table class="pc-tabla"><tr><th>Dia</th><th>Operador</th><th>O que será feito</th><th>Posto</th><th>Horas</th></tr>';
+	$schedTab = '<table class="pc-tabla"><tr><th>Dia</th><th>Operador</th><th>O que será feito</th><th>Posto</th><th>Qtd</th><th>Horas</th></tr>';
 	$cur = null;
 	foreach ($C['sched'] as $s) {
 		if ($s['ts'] !== $cur) {
@@ -977,7 +1066,8 @@ function pc_html($C)
 		} else {
 			$schedTab .= '<tr><td></td>';
 		}
-		$schedTab .= '<td>' . $s['op'] . '</td><td>' . htmlspecialchars($s['ref'] . ' — ' . $s['prod']) . '</td><td>' . $s['ws'] . '</td><td align="right">' . $s['h'] . '</td></tr>';
+		$qty = isset($s['qty']) && $s['qty'] ? $s['qty'] : '—';
+		$schedTab .= '<td>' . $s['op'] . '</td><td>' . htmlspecialchars($s['ref'] . ' — ' . $s['prod']) . '</td><td>' . $s['ws'] . '</td><td align="right">' . $qty . '</td><td align="right">' . $s['h'] . '</td></tr>';
 	}
 	$schedTab .= '</table>';
 

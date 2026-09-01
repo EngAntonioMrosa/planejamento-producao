@@ -323,9 +323,16 @@ function pc_css()
 .pc-gantt .ghead .cells{height:30px}
 .pc-gantt .ghead .cell{height:30px;font-size:10px;color:#5a6a85;padding-top:2px}
 .pc-gantt .bar{position:absolute;top:8px;height:20px;border-radius:4px;min-width:6px;cursor:default;font-size:0}
-.pc-gantt .bar:hover{outline:2px solid #1a355e;font-size:0}
-.pc-gantt .bar.has{background-image:linear-gradient(rgba(255,255,255,.25),rgba(255,255,255,.25))}
-.today{background:#fff2cc!important}
+	.pc-gantt .bar:hover{outline:2px solid #1a355e;font-size:0}
+	.pc-gantt .bar.has{background-image:linear-gradient(rgba(255,255,255,.25),rgba(255,255,255,.25))}
+	.pc-gantt .bar.has[data-tooltip]{position:relative}
+	.pc-gantt .bar.has[data-tooltip]::after{
+		content:attr(data-tooltip); display:none; position:absolute; bottom:120%; left:50%; transform:translateX(-50%);
+		background:#1a1a1a; color:#fff; padding:8px 10px; border-radius:6px; font-size:11px; white-space:pre; z-index:10;
+		max-width:280px; line-height:1.4; box-shadow:0 4px 12px rgba(0,0,0,.3);
+	}
+	.pc-gantt .bar.has[data-tooltip]:hover::after{display:block}
+	.today{background:#fff2cc!important}
 .pc-warn{background:#ffe1e1;border:1px solid #e5a3a3;color:#8c1d18;padding:10px 12px;border-radius:6px;margin-bottom:12px;font-weight:bold}
 td.lack{background:#ffe1e1;color:#8c1d18}
 input[type=number],input[type=text],select,textarea{padding:4px}
@@ -351,7 +358,14 @@ input[type=number],input[type=text],select,textarea{padding:4px}
 .seq-gantt .ghead .cells{height:30px}
 .seq-gantt .ghead .cell{height:30px;font-size:10px;color:#5a6a85;padding-top:2px}
 .seq-gantt .bar{position:absolute;top:8px;height:20px;border-radius:4px;min-width:6px;font-size:0}
-.seq-gantt .bar.has{background-image:linear-gradient(rgba(255,255,255,.25),rgba(255,255,255,.25))}
+	.seq-gantt .bar.has{background-image:linear-gradient(rgba(255,255,255,.25),rgba(255,255,255,.25))}
+	.seq-gantt .bar.has[data-tooltip]{position:relative}
+	.seq-gantt .bar.has[data-tooltip]::after{
+		content:attr(data-tooltip); display:none; position:absolute; bottom:120%; left:50%; transform:translateX(-50%);
+		background:#1a1a1a; color:#fff; padding:8px 10px; border-radius:6px; font-size:11px; white-space:pre; z-index:10;
+		max-width:280px; line-height:1.4; box-shadow:0 4px 12px rgba(0,0,0,.3);
+	}
+	.seq-gantt .bar.has[data-tooltip]:hover::after{display:block}
 .etp-mo{margin:8px 0;border:1px solid #e5eaf2;border-radius:6px;overflow:hidden}
 .etp-mo summary{list-style:none;display:flex;align-items:center;gap:8px;padding:9px 12px;cursor:pointer;background:#f7f9fd;flex-wrap:wrap}
 .etp-mo summary::-webkit-details-marker{display:none}
@@ -476,7 +490,8 @@ function pc_js()
 	function seqGanttHtml(){
 		var days=PLAN.bDays||[];
 		if(!days.length){return '<p class="muted">Sem dados.</p>';}
-		var cellW=120;
+		var cellW = parseInt(localStorage.getItem('pcp_cellW') || '120', 10);
+		function setCellW(w){ cellW = Math.max(80, Math.min(200, w)); localStorage.setItem('pcp_cellW', cellW); renderSeq(); }
 		var colors=pcColors();
 		// agrupar operações por máquina
 		var macOrder=[],byMac={};
@@ -497,6 +512,8 @@ function pc_js()
 		days.forEach(function(d,i){
 			html+='<div class="cell'+(d===todayISO()?' today':'')+'" style="left:'+(i*cellW)+'px;width:'+cellW+'px">'+d.slice(8)+'</div>';
 		});
+		html+='<button type="button" class="mini" onclick="setCellW('+(cellW-20)+')" style="margin-left:8px" title="Diminuir largura da célula">−</button>';
+		html+='<button type="button" class="mini" onclick="setCellW('+(cellW+20)+')" style="margin-left:4px" title="Aumentar largura da célula">+</button>';
 		html+='</div></div>';
 		macOrder.forEach(function(w){
 			// Gantt real por máquina: dentro de cada dia as atividades são posicionadas
@@ -519,7 +536,12 @@ function pc_js()
 					var startX=i*cellW+2+cum*cellW;
 					var wdt=Math.max(8,Math.min(cellW-4,(op.h/capDay)*cellW));
 					if(startX>=i*cellW+cellW){return;}
-					html+='<div class="bar has" title="'+esc(op.ref+' · qtd '+pcQtyPeriod(op.ref,op.wid,op.h)+' · '+op.op+' · '+op.h+'h · '+ts)+'" style="left:'+startX+'px;width:'+wdt+'px;background:'+c+'"></div>';
+					var tip = JSON.stringify([
+						op.ref + ' | ' + op.ws + ' | ' + (op.op||'–'),
+						op.h + ' h | ' + ts + ' | ' + Math.round((op.h/capDay)*100) + '% do dia',
+						'Seq: ' + (op.prio||'?') + ' | Posto: ' + op.wid
+					].join('\n'));
+					html+='<div class="bar has" data-tooltip=' + tip + ' style="left:'+startX+'px;width:'+wdt+'px;background:'+c+'"></div>';
 					cum+=frac;
 				});
 			});

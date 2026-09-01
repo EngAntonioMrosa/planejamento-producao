@@ -937,6 +937,7 @@ function pc_calc($EQUIPE, $mo, $moWsSec, $wsNames, $wsTotalSec, $CAP_H_PER_DAY, 
 		'missingN' => $missN,
 		'missingCost' => round($missCost, 2),
 		'overdue' => $overdue,
+		'mo' => array_map(function($m) { return array('ref'=>$m['ref'],'label'=>$m['label'],'qty'=>$m['qty'],'status'=>$m['status'],'ds'=>$m['ds'],'de'=>$m['de']); }, $mo),
 		'err' => '',
 	);
 }

@@ -40,6 +40,114 @@ if (isset($_GET['reset'])) {
 list($mo, $moWsSec, $wsNames, $wsTotalSec, $moSteps, $moStepOp) = pc_load_data();
 $EQUIPE = pc_equipe_get();
 
+// ---------- AJAX: salvar demanda mensal ----------
+if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['demanda'])) {
+	$raw = isset($_POST['demanda']) ? $_POST['demanda'] : $_GET['demanda'];
+	$dem = json_decode($raw, true);
+	if (!is_array($dem)) {
+		$dem = array();
+	}
+	// normaliza: ref => int >= 0
+	$cleanDem = array();
+	foreach ($dem as $ref => $v) {
+		$ref = trim((string)$ref);
+		$v = (int)$v;
+		if ($ref !== '' && $v > 0) {
+			$cleanDem[$ref] = $v;
+		}
+	}
+	pc_const_set('PLANCONF_DEMANDA', json_encode($cleanDem));
+	// aplica a demanda na quantidade das ordens (llx_mrp_mo.qty por ref)
+	foreach ($cleanDem as $ref => $v) {
+		$sql = "UPDATE llx_mrp_mo SET qty = " . (int)$v . " WHERE ref = '" . $db->escape($ref) . "' AND status NOT IN (9)";
+		$db->query($sql);
+	}
+	// aplica a demanda também nos itens internos do planejamento (qty por ref)
+	$itens = pc_itens_get();
+	$changed = false;
+	foreach ($itens as $id => &$it) {
+		$ref = isset($it['ref']) ? trim($it['ref']) : '';
+		if ($ref !== '' && isset($cleanDem[$ref])) {
+			$it['qty'] = $cleanDem[$ref];
+			$changed = true;
+		}
+	}
+	unset($it);
+	if ($changed) {
+		pc_itens_set($itens);
+	}
+	// recalcula com a nova demanda
+	list($mo, $moWsSec, $wsNames, $wsTotalSec, $moSteps, $moStepOp) = pc_load_data();
+	$C = pc_calc($EQUIPE, $mo, $moWsSec, $wsNames, $wsTotalSec, $CAP_H_PER_DAY, $moSteps, $moStepOp, pc_eficiencia_get() / 100);
+	header('Content-Type: application/json; charset=utf-8');
+	echo json_encode(array('ok' => true, 'calc' => $C, 'html' => pc_html($C)));
+	$db->close();
+	exit;
+}
+
+// ---------- AJAX: criar novo item interno do planejamento ----------
+if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['novo_item'])) {
+	$ref = trim(isset($_POST['ref']) ? $_POST['ref'] : (isset($_GET['ref']) ? $_GET['ref'] : ''));
+	$label = trim(isset($_POST['label']) ? $_POST['label'] : (isset($_GET['label']) ? $_GET['label'] : ''));
+	$qty = (int)(isset($_POST['qty']) ? $_POST['qty'] : (isset($_GET['qty']) ? $_GET['qty'] : 0));
+	$ok = true;
+	$error = '';
+	if ($ref === '') {
+		$ok = false;
+		$error = 'Informe a referência da peça.';
+	}
+	$itens = pc_itens_get();
+	if ($ok) {
+		foreach ($itens as $it) {
+			if (isset($it['ref']) && trim($it['ref']) === $ref) {
+				$ok = false;
+				$error = 'Já existe uma peça com a referência ' . $ref . '.';
+				break;
+			}
+		}
+	}
+	if ($qty < 0) {
+		$qty = 0;
+	}
+	if ($ok) {
+		$id = 1;
+		while (isset($itens[$id])) {
+			$id++;
+		}
+		$itens[$id] = array('ref' => $ref, 'label' => $label, 'qty' => $qty);
+		pc_itens_set($itens);
+	}
+	list($mo, $moWsSec, $wsNames, $wsTotalSec, $moSteps, $moStepOp) = pc_load_data();
+	$C = pc_calc($EQUIPE, $mo, $moWsSec, $wsNames, $wsTotalSec, $CAP_H_PER_DAY, $moSteps, $moStepOp, pc_eficiencia_get() / 100);
+	header('Content-Type: application/json; charset=utf-8');
+	echo json_encode(array('ok' => $ok, 'error' => $error, 'calc' => $C, 'html' => $ok ? pc_html($C) : ''));
+	$db->close();
+	exit;
+}
+
+// ---------- AJAX: excluir item interno do planejamento ----------
+if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['del_item'])) {
+	$id = (int)(isset($_POST['id']) ? $_POST['id'] : $_GET['id']);
+	$itens = pc_itens_get();
+	if ($id > 0 && isset($itens[$id])) {
+		unset($itens[$id]);
+		pc_itens_set($itens);
+		// remove etapas custom deste item (mid = -id)
+		$midstr = (string)(-$id);
+		$steps = pc_steps_get();
+		if (isset($steps[$midstr])) {
+			unset($steps[$midstr]);
+			pc_steps_set($steps);
+		}
+	}
+	list($mo, $moWsSec, $wsNames, $wsTotalSec, $moSteps, $moStepOp) = pc_load_data();
+	$C = pc_calc($EQUIPE, $mo, $moWsSec, $wsNames, $wsTotalSec, $CAP_H_PER_DAY, $moSteps, $moStepOp, pc_eficiencia_get() / 100);
+	header('Content-Type: application/json; charset=utf-8');
+	echo json_encode(array('ok' => true, 'calc' => $C, 'html' => pc_html($C)));
+	$db->close();
+	exit;
+}
+
 // ---------- AJAX: salvar configuração e recalcular em tempo real ----------
 if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['cfg'])) {
 	$raw = base64_decode(strtr($_GET['cfg'], '-_', '+/'));
@@ -210,6 +318,7 @@ foreach (array(
 	'seq'  => '📋 Sequência',
 	'etp'  => '🛠️ Etapas',
 	'mat'  => '📦 Materiais',
+	'dem'  => '📈 Demanda Mensal',
 	'cfg'  => '⚙️ Configuração',
 ) as $tab => $lbl) {
 	print '<button class="pc-tab" data-tab="' . $tab . '">' . $lbl . '</button>';
@@ -283,6 +392,25 @@ print '<div class="pc-panel" id="tab-cfg" style="display:none">
 
 print '</div>';
 
+// ---------------- Demanda Mensal ----------------
+print '<div class="pc-panel" id="tab-dem" style="display:none">
+	<p><button class="butAction" id="btn_save_dem" type="button">💾 Salvar demanda</button> <span class="opacitymedium">Alterações só são aplicadas ao clicar em Salvar.</span></p>
+	<div class="pc-card"><h3>➕ Criar novo item (peça interna do planejamento)</h3>
+		<p class="opacitymedium" style="font-size:12px;margin-bottom:8px">Crie uma peça nova sem criar ordem real no Dolibarr. Ela aparece aqui na Demanda e você pode montar as etapas dela na aba <b>Etapas</b>.</p>
+		<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+			<label style="font-size:13px">Ref:<br><input type="text" id="novo_ref" placeholder="ex: MO-NOVA-PECA1" style="padding:6px;font-size:13px"></label>
+			<label style="font-size:13px">Descrição:<br><input type="text" id="novo_label" placeholder="ex: Peça Nova 1" style="padding:6px;font-size:13px;min-width:200px"></label>
+			<label style="font-size:13px">Qtd:<br><input type="number" id="novo_qty" min="0" step="1" value="100" style="padding:6px;font-size:13px;width:90px"></label>
+			<label style="font-size:13px;padding-top:18px"><button class="butAction" id="btn_novo_item" type="button">➕ Criar item</button></label>
+		</div>
+		<div id="novo_status" class="opacitymedium" style="font-size:12px;margin-top:6px"></div>
+	</div>
+	<div class="pc-card" style="margin-top:14px"><h3>Demanda Mensal por peça (unidades)</h3>
+		<p class="opacitymedium" style="font-size:12px;margin-bottom:10px">Defina a quantidade de cada peça a ser produzida no mês. A demanda altera a quantidade de produção (e as horas do cronograma). Edite os valores e clique em <b>Salvar demanda</b>.</p>
+		<div id="demList"></div>
+	</div>
+	<div class="pc-card" style="margin-top:14px"><h3>Resumo da Demanda</h3><div id="htDemImpact"></div></div></div>';
+
 print '<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>';
 print '<script>';
 print 'var PLAN=' . json_encode($C) . ';';
@@ -323,16 +451,9 @@ function pc_css()
 .pc-gantt .ghead .cells{height:30px}
 .pc-gantt .ghead .cell{height:30px;font-size:10px;color:#5a6a85;padding-top:2px}
 .pc-gantt .bar{position:absolute;top:8px;height:20px;border-radius:4px;min-width:6px;cursor:default;font-size:0}
-	.pc-gantt .bar:hover{outline:2px solid #1a355e;font-size:0}
-	.pc-gantt .bar.has{background-image:linear-gradient(rgba(255,255,255,.25),rgba(255,255,255,.25))}
-	.pc-gantt .bar.has[data-tooltip]{position:relative}
-	.pc-gantt .bar.has[data-tooltip]::after{
-		content:attr(data-tooltip); display:none; position:absolute; bottom:120%; left:50%; transform:translateX(-50%);
-		background:#1a1a1a; color:#fff; padding:8px 10px; border-radius:6px; font-size:11px; white-space:pre; z-index:10;
-		max-width:280px; line-height:1.4; box-shadow:0 4px 12px rgba(0,0,0,.3);
-	}
-	.pc-gantt .bar.has[data-tooltip]:hover::after{display:block}
-	.today{background:#fff2cc!important}
+.pc-gantt .bar:hover{outline:2px solid #1a355e;font-size:0}
+.pc-gantt .bar.has{background-image:linear-gradient(rgba(255,255,255,.25),rgba(255,255,255,.25))}
+.today{background:#fff2cc!important}
 .pc-warn{background:#ffe1e1;border:1px solid #e5a3a3;color:#8c1d18;padding:10px 12px;border-radius:6px;margin-bottom:12px;font-weight:bold}
 td.lack{background:#ffe1e1;color:#8c1d18}
 input[type=number],input[type=text],select,textarea{padding:4px}
@@ -358,14 +479,7 @@ input[type=number],input[type=text],select,textarea{padding:4px}
 .seq-gantt .ghead .cells{height:30px}
 .seq-gantt .ghead .cell{height:30px;font-size:10px;color:#5a6a85;padding-top:2px}
 .seq-gantt .bar{position:absolute;top:8px;height:20px;border-radius:4px;min-width:6px;font-size:0}
-	.seq-gantt .bar.has{background-image:linear-gradient(rgba(255,255,255,.25),rgba(255,255,255,.25))}
-	.seq-gantt .bar.has[data-tooltip]{position:relative}
-	.seq-gantt .bar.has[data-tooltip]::after{
-		content:attr(data-tooltip); display:none; position:absolute; bottom:120%; left:50%; transform:translateX(-50%);
-		background:#1a1a1a; color:#fff; padding:8px 10px; border-radius:6px; font-size:11px; white-space:pre; z-index:10;
-		max-width:280px; line-height:1.4; box-shadow:0 4px 12px rgba(0,0,0,.3);
-	}
-	.seq-gantt .bar.has[data-tooltip]:hover::after{display:block}
+.seq-gantt .bar.has{background-image:linear-gradient(rgba(255,255,255,.25),rgba(255,255,255,.25))}
 .etp-mo{margin:8px 0;border:1px solid #e5eaf2;border-radius:6px;overflow:hidden}
 .etp-mo summary{list-style:none;display:flex;align-items:center;gap:8px;padding:9px 12px;cursor:pointer;background:#f7f9fd;flex-wrap:wrap}
 .etp-mo summary::-webkit-details-marker{display:none}
@@ -400,15 +514,6 @@ button.mini.add{color:#2b7a3b;border-color:#bcdcc4}
 @keyframes msgPulse{0%{transform:scale(1);opacity:.6}50%{transform:scale(1.05);opacity:1}100%{transform:scale(1);opacity:1}}
 .pc-msg.pc-ok{animation:msgPulse .5s ease;color:#1a6b2f}
 .muted{color:#8a93a6;font-style:italic}
-
-/* ===== GANTT ZOOM & CONFLICT ===== */
-.seq-gantt .ghead .zoom-wrap{display:flex;gap:6px;align-items:center;margin-left:8px;padding:2px 6px;background:#f4f7fb;border-radius:4px;border:1px solid #d8e0ec}
-.seq-gantt .ghead .zoom-wrap label{font-size:11px;color:#5a6a85;white-space:nowrap}
-.seq-gantt .ghead .zoom-wrap select{font-size:12px;padding:2px 6px;border:1px solid #cbd5e6;border-radius:4px;background:#fff}
-.seq-gantt .bar.conflict{border:2px solid #c62828;animation:pulse 1.5s infinite}
-@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(198,40,40,.7)}50%{box-shadow:0 0 0 6px rgba(198,40,40,0)}}
-.seq-gantt .cell.slot{border-left:1px dashed #e0e6ef}
-.seq-gantt .ghead .cell.slot-label{font-size:9px;padding-top:1px;color:#7a8aa0}
 CSS;
 }
 
@@ -474,52 +579,6 @@ function pc_js()
 		renderCharts();
 		renderSeq();
 	}
-
-	// ===== GLOBAL: Zoom, Cell Width & MO Color =====
-	window.setZoom = function(z){
-		localStorage.setItem('pcp_ganttZoom', z);
-		renderSeq();
-	};
-	window.setCellW = function(w){
-		var zoom = localStorage.getItem('pcp_ganttZoom') || 'day';
-		if(zoom === 'day'){
-			w = Math.max(80, Math.min(200, w));
-			localStorage.setItem('pcp_cellW', w);
-			renderSeq();
-		}
-	};
-	function moColorGlobal(mid, bDays){
-		var st = (PLAN.seqList||[]).find(function(it){return it.mid===mid;});
-		st = st ? st.status : undefined;
-		if(st===undefined){ return '#9aa5b5'; }
-		var today = todayISO();
-		var isLate = false, isNear = false;
-		if(PLAN.mo && PLAN.mo[mid]){
-			var mo = PLAN.mo[mid];
-			var de = mo.de;
-			if(de && (st===2 || st===3)){
-				if(de < today){ isLate = true; }
-				else {
-					var diffDays = 0;
-					for(var i=0;i<bDays.length;i++){
-						if(bDays[i] >= today && bDays[i] <= de){ diffDays++; }
-					}
-					if(diffDays <= 2 && diffDays > 0){ isNear = true; }
-				}
-			}
-		}
-		if(isLate) return '#c62828';
-		if(isNear) return '#f57f17';
-		switch(st){
-			case 1: return '#9e9e9e';
-			case 2: return '#2e7d32';
-			case 3: return '#1976d2';
-			case 4: return '#757575';
-			case 5: return '#bdbdbd';
-			default: return '#9aa5b5';
-		}
-	}
-
 	// ================== Sequência de fabricação manual ==================
 	var SEQ_STATE=null;
 	function seqOrder(){ // array de mids na ordem atual exibida
@@ -545,20 +604,9 @@ function pc_js()
 	function seqGanttHtml(){
 		var days=PLAN.bDays||[];
 		if(!days.length){return '<p class="muted">Sem dados.</p>';}
-
-		// ===== ZOOM TEMPORAL =====
-		var zoom = localStorage.getItem('pcp_ganttZoom') || 'day'; // 'week' | 'day' | 'hour'
-
-		// config por zoom
-		var zoomCfg = {
-			week: { cellW: 40, granularity: 'week', slotsPerDay: 1, groupDays: 5 },
-			day:  { cellW: 120, granularity: 'day', slotsPerDay: 1, groupDays: 1 },
-			hour: { cellW: 480, granularity: 'hour', slotsPerDay: 48, groupDays: 1 } // 30min slots
-		};
-		var cfg = zoomCfg[zoom];
-		var cellW = (zoom === 'day') ? parseInt(localStorage.getItem('pcp_cellW') || '120', 10) : cfg.cellW;
-
-		// ===== AGRUPAR OPERAÇÕES POR MÁQUINA =====
+		var cellW=120;
+		var colors=pcColors();
+		// agrupar operações por máquina
 		var macOrder=[],byMac={};
 		PLAN.sched.forEach(function(s){
 			var w=s.wid;
@@ -566,141 +614,41 @@ function pc_js()
 			byMac[w].ops.push(s);
 		});
 		_rebuildTotKH();
+		// order machines by total hours desc
 		var totByMac={};PLAN.sched.forEach(function(s){totByMac[s.wid]=(totByMac[s.wid]||0)+s.h;});
 		macOrder.sort(function(a,b){return (totByMac[b]||0)-(totByMac[a]||0);});
-
-		// ===== PREPARAR COLUNAS (days ou weeks ou slots) =====
-		var cols = []; // cada coluna = {label, startIdx, endIdx, isToday, isSlot}
-		var today = todayISO();
-		
-		if(zoom === 'week'){
-			// Agrupar dias úteis em semanas (seg-sex = 5 dias)
-			for(var w=0; w<days.length; w+=5){
-				var weekDays = days.slice(w, w+5);
-				if(!weekDays.length) break;
-				var isTodayWeek = weekDays.indexOf(today) >= 0;
-				cols.push({label: weekDays[0].slice(5)+'–'+weekDays[weekDays.length-1].slice(5), 
-					startIdx: w, endIdx: w+weekDays.length-1, isToday: isTodayWeek, days: weekDays});
-			}
-		}else if(zoom === 'hour'){
-			// 1 coluna por dia, mas com 48 slots de 30min
-			days.forEach(function(d,i){
-				cols.push({label: d.slice(8), startIdx: i, endIdx: i, isToday: d===today, isSlot: true, dayIdx: i, day: d});
-			});
-		}else{
-			// day (padrão): 1 coluna por dia útil
-			days.forEach(function(d,i){
-				cols.push({label: d.slice(8), startIdx: i, endIdx: i, isToday: d===today, dayIdx: i, day: d});
-			});
-		}
-
 		var dayIdx={};days.forEach(function(d,i){dayIdx[d]=i;});
-
-		// ===== HEADER =====
+		var today=PLAN.sched.length? PLAN.dayStart: todayISO();
+		var weekMap={};days.forEach(function(d){weekMap[d]=(d<today)?'past':(d===today?'today':'');});
+		// precompute start ts per op row for sequential bars: use MIN op? 
 		var html='<div class="seq-gantt"><div class="ghead"><div class="lbl">Máquina</div><div class="cells">';
-		
-		// Zoom selector
-		html+='<div class="zoom-wrap" style="position:absolute;right:8px;top:2px;z-index:5">';
-		html+='<label>Zoom: </label>';
-		html+='<select id="ganttZoom" onchange="setZoom(this.value)" style="font-size:11px;padding:2px 4px;">';
-		html+='<option value="week"'+(zoom==='week'?' selected':'')+'>Semana</option>';
-		html+='<option value="day"'+(zoom==='day'?' selected':'')+'>Dia</option>';
-		html+='<option value="hour"'+(zoom==='hour'?' selected':'')+'>Hora</option>';
-		html+='</select>';
-		html+='</div>';
-
-		// Column headers
-		cols.forEach(function(col, ci){
-			var cls = 'cell'+(col.isToday?' today':'')+(col.isSlot?' slot-label':'');
-			html+='<div class="'+cls+'" style="left:'+(ci*cellW)+'px;width:'+cellW+'px">'+col.label+'</div>';
+		days.forEach(function(d,i){
+			html+='<div class="cell'+(d===todayISO()?' today':'')+'" style="left:'+(i*cellW)+'px;width:'+cellW+'px">'+d.slice(8)+'</div>';
 		});
-		html+='<button type="button" class="mini" onclick="setCellW('+(cellW-20)+')" style="margin-left:8px" title="Diminuir largura">−</button>';
-		html+='<button type="button" class="mini" onclick="setCellW('+(cellW+20)+')" style="margin-left:4px" title="Aumentar largura">+</button>';
 		html+='</div></div>';
-
-		// ===== LINHAS POR MÁQUINA =====
 		macOrder.forEach(function(w){
+			// Gantt real por máquina: dentro de cada dia as atividades são posicionadas
+			// horizontalmente pelo tempo acumulado (uma fica mais à frente, outra mais atrás)
 			var perDay={};
 			byMac[w].ops.forEach(function(op){
 				if(!perDay[op.ts]){perDay[op.ts]=[];}
 				perDay[op.ts].push(op);
 			});
 			var capDay=pcCapDay(w);
-			
 			html+='<div class="row"><div class="lbl">'+esc(byMac[w].label)+'</div><div class="cells">';
-			
-			// Background cells
-			cols.forEach(function(col, ci){
-				var cls = 'cell'+(col.isToday?' today':'')+(col.isSlot?' slot':'');
-				html+='<div class="'+cls+'" style="left:'+(ci*cellW)+'px;width:'+cellW+'px"></div>';
-			});
-
-			// Barras por dia/slot
+			days.forEach(function(d,i){html+='<div class="cell" style="left:'+(i*cellW)+'px;width:'+cellW+'px"></div>';});
 			Object.keys(perDay).forEach(function(ts){
-				var dIdx = dayIdx[ts];
-				if(dIdx<0 || dIdx===undefined) return;
-				var ops = perDay[ts]; // já em ordem cronológica
-				
-				// ===== CONFLICT DETECTION: primeiro calcular cum total do dia =====
-				var totalCum = 0;
-				ops.forEach(function(op){
-					var frac = capDay>0 ? op.h/capDay : 0;
-					totalCum += frac;
-				});
-				
-				// Determinar quais índices são conflito (heurística: últimos que não cabem)
-				var conflictIndices = {};
-				if(totalCum > 1.0){
-					var cutoff = Math.floor(ops.length * (1/totalCum));
-					for(var ci=cutoff; ci<ops.length; ci++){
-						conflictIndices[ci] = true;
-					}
-				}
-				
-				// Segundo pass: renderizar barras
-				var cum = 0;
+				var i=dayIdx[ts];if(i<0||i===undefined)return;
+				var ops=perDay[ts]; // já em ordem cronológica (ordem no PLAN.sched)
+				var c=colors[w]||'#9aa5b5';
+				var cum=0;
 				ops.forEach(function(op,k){
-					var frac = capDay>0 ? op.h/capDay : 0;
-					var barColor = moColorGlobal(op.mid, days);
-					var isConflict = conflictIndices[k] === true;
-					
-					if(zoom === 'hour'){
-						// Modo hora: 48 slots de 30min por dia
-						var slotIdx = Math.floor((op.h / capDay) * 48); // approx
-						var startSlot = Math.floor(cum * 48);
-						var slotW = cellW / 48;
-						var startX = dIdx*cellW + 2 + startSlot*slotW;
-						var wdt = Math.max(2, slotIdx * slotW);
-						if(startX >= dIdx*cellW + cellW) return;
-						
-						var tipLines = [
-							op.ref + ' | ' + op.ws + ' | ' + (op.op||'–'),
-							op.h + ' h | ' + ts + ' | ' + Math.round((op.h/capDay)*100) + '% do dia',
-							'Seq: ' + (op.prio||'?') + ' | Posto: ' + op.wid
-						];
-						if(isConflict) tipLines.push('⚠ CONFLITO: excede capacidade da máquina no dia');
-						var tip = JSON.stringify(tipLines.join('\n'));
-						
-						html+='<div class="bar has'+(isConflict?' conflict':'')+'" data-tooltip='+tip+' style="left:'+startX+'px;width:'+wdt+'px;background:'+barColor+'"></div>';
-					}else{
-						// Modo day ou week
-						var colIdx = zoom === 'week' ? Math.floor(dIdx / 5) : dIdx;
-						if(colIdx >= cols.length) return;
-						var startX = colIdx*cellW + 2 + cum*cellW;
-						var wdt = Math.max(8, Math.min(cellW-4, frac*cellW));
-						if(startX >= colIdx*cellW + cellW) return;
-						
-						var tipLines = [
-							op.ref + ' | ' + op.ws + ' | ' + (op.op||'–'),
-							op.h + ' h | ' + ts + ' | ' + Math.round((op.h/capDay)*100) + '% do dia',
-							'Seq: ' + (op.prio||'?') + ' | Posto: ' + op.wid
-						];
-						if(isConflict) tipLines.push('⚠ CONFLITO: excede capacidade da máquina no dia');
-						var tip = JSON.stringify(tipLines.join('\n'));
-						
-						html+='<div class="bar has'+(isConflict?' conflict':'')+'" data-tooltip='+tip+' style="left:'+startX+'px;width:'+wdt+'px;background:'+barColor+'"></div>';
-					}
-					cum += frac;
+					var frac=capDay>0?op.h/capDay:0;
+					var startX=i*cellW+2+cum*cellW;
+					var wdt=Math.max(8,Math.min(cellW-4,(op.h/capDay)*cellW));
+					if(startX>=i*cellW+cellW){return;}
+					html+='<div class="bar has" title="'+esc(op.ref+' · qtd '+pcQtyPeriod(op.ref,op.wid,op.h)+' · '+op.op+' · '+op.h+'h · '+ts)+'" style="left:'+startX+'px;width:'+wdt+'px;background:'+c+'"></div>';
+					cum+=frac;
 				});
 			});
 			html+='</div></div>';
@@ -820,6 +768,7 @@ function pc_js()
 	function etpQty(mid){return SEQ_MAP[mid]?SEQ_MAP[mid].qty:1;}
 	function etpSpcVal(x){var v=parseFloat(String(x).replace(',','.'));return isFinite(v)&&v>0?v:0;}
 	function etpBuyVal(x){return (x===1||x==='1'||x===true)?1:0;}
+	function etpAtivoVal(x){return (x===0||x==='0')?0:1;}
 	function etpRows(mid){
 		if(!ETP_EDIT){ETP_EDIT={};}
 		if(!ETP_EDIT[mid]){
@@ -855,6 +804,7 @@ function pc_js()
 			+'</span></div>'
 			+'<div class="etp-fbody">'+etpWsSel(mid,row,idx)+' '+etpOpSel(mid,row,idx)
 			+'<label class="etp-buylbl"><input type="checkbox" class="etp-buy" data-e-buy="'+idx+'" data-mid="'+mid+'"'+(buy?' checked':'')+'> Compra pronto / terceirizado</label>'
+		+'<label class="etp-ativolbl"><input type="checkbox" class="etp-ativo" data-e-ativo="'+idx+'" data-mid="'+mid+'"'+(row.ativo===false?'':' checked')+'> Ativa</label>'
 			+'<div class="etp-spcbox"><input type="number" step="1" min="0.001" class="etp-spc" data-e-spc="'+idx+'" data-mid="'+mid+'" value="'+row.spc+'" placeholder="0" style="'+(buy?'opacity:.45':'')+'"> <span class="etp-un">s/pç</span></div>'
 			+'</div></div>';
 	}
@@ -907,8 +857,8 @@ function pc_js()
 		var out={};
 		(PLAN.seqList||[]).forEach(function(it){
 			if(ETP_BOM[it.mid]){return;} // usa BOM: não salva custom
-			var rows=etpRows(it.mid).filter(function(r){return r.wid&&(etpSpcVal(r.spc)>0||etpBuyVal(r.buy));})
-            .map(function(r){return {wid:parseInt(r.wid,10),spc:etpSpcVal(r.spc),op:r.op||"",buy:etpBuyVal(r.buy)};});
+			var rows=etpRows(it.mid).filter(function(r){return r.wid&&(etpSpcVal(r.spc)>0||etpBuyVal(r.buy))&&r.ativo!==false;})
+            .map(function(r){return {wid:parseInt(r.wid,10),spc:etpSpcVal(r.spc),op:r.op||"",buy:etpBuyVal(r.buy),ativo:etpAtivoVal(r.ativo)};});
 			if(rows.length){out[it.mid]=rows;}
 		});
 		return out;
@@ -979,6 +929,7 @@ function pc_js()
         }
         etpCommit(mid);
     }
+    else if(t.hasAttribute('data-e-ativo')){rows[idx].ativo=etpAtivoVal(t.checked?1:0);}
     delete ETP_BOM[mid];
     if(e.type==='change'){etpCommit(mid);}
 }
@@ -1021,6 +972,9 @@ function pc_js()
 		renderCharts();
 		renderSeq();
 		bindEtp();
+		// inicializar campo de demanda
+		renderDemandList();
+		renderDemandImpact();
 		// abas
 		var tabs=document.querySelectorAll('.pc-tab');
 		for(var i=0;i<tabs.length;i++){(function(b){b.addEventListener('click',function(){
@@ -1039,6 +993,9 @@ function pc_js()
 			}
 			if(panelId==='tab-etp'){
 				setTimeout(function(){renderSteps();}, 50);
+			}
+			if(panelId==='tab-dem'){
+				setTimeout(function(){renderDemandImpact();}, 50);
 			}
 		});})(tabs[i]);}
 	};
@@ -1105,12 +1062,122 @@ function pc_js()
 		if(msg){msg.textContent='Salvando…';}
 		window.PcSave(true);
 	}
+	function saveDemand(){
+		var msg=document.getElementById('pc-msg');
+		if(msg){msg.textContent='Salvando demanda…';}
+		// coleta demandas dos inputs de cada peça
+		var map={};
+		var inputs=document.querySelectorAll('input[data-dem-ref]');
+		for(var i=0;i<inputs.length;i++){
+			var r=inputs[i].getAttribute('data-dem-ref');
+			var v=parseInt(inputs[i].value||'0',10);
+			map[r]=v>0?v:0;
+		}
+		fetch('index.php?ajax=1&demanda='+encodeURIComponent(JSON.stringify(map)),{method:'GET',credentials:'same-origin'})
+			.then(function(r){return r.json();})
+			.then(function(res){
+				if(res.ok){
+					PLAN=res.calc;
+					refreshCharts(PLAN);
+					renderSeq();
+					refresh(res.html);
+					msg.classList.add('pc-ok');void msg.offsetWidth;msg.classList.remove('pc-ok');setTimeout(function(){msg.classList.add('pc-ok');},10);
+					msg.textContent='Demanda salva ✓ — término '+PLAN.endTs+' ('+PLAN.totSched+' h)';
+					renderDemandList();
+					renderDemandImpact();
+				}else{msg.textContent='Erro: '+(res.error||'desconhecido');}
+			})
+			.catch(function(e){msg.textContent='Erro: '+e;});
+	}
+	function renderDemandList(){
+		var wrap=document.getElementById('demList');
+		if(!wrap){return;}
+		var dem=PLAN.demanda||{};
+		var html='<table class="pc-tabla"><tr><th>Peça (Ref)</th><th>Produto</th><th>Demanda Mensal (un)</th><th>Qtd atual</th><th></th></tr>';
+		(PLAN.seqList||[]).forEach(function(it){
+			var cur=dem[it.ref];
+			var val=(cur===undefined||cur===null)?it.qty:cur;
+			var isInt=(it.mid<0);
+			var delBtn=isInt?'<button type="button" class="mini del" data-del-mid="'+it.mid+'" title="Excluir item">🗑</button>':'';
+			html+='<tr><td><b>'+esc(it.ref)+'</b>'+(isInt?' <span class="opacitymedium" style="font-size:11px">(interno)</span>':'')+'</td><td>'+esc(it.label)+'</td>'
+				+'<td><input type="number" data-dem-ref="'+esc(it.ref)+'" min="0" step="1" value="'+esc(val)+'" style="width:110px;padding:5px"></td>'
+				+'<td>'+esc(it.qty)+'</td><td>'+delBtn+'</td></tr>';
+		});
+		if(!(PLAN.seqList||[]).length){html='<p class="muted">Sem ordens de fabricação.</p>';}
+		html+='</table>';
+		wrap.innerHTML=html;
+	}
+	function renderDemandImpact(){
+		var wrap=document.getElementById('htDemImpact');
+		if(!wrap){return;}
+		var dem=PLAN.demanda||{};
+		var soma=0,totalQty=0;
+		(PLAN.seqList||[]).forEach(function(it){
+			var cur=dem[it.ref];
+			var val=(cur===undefined||cur===null)?it.qty:cur;
+			soma+=parseInt(val,10)||0;
+			totalQty+=parseInt(it.qty,10)||0;
+		});
+		var tot=PLAN.totSched||0;
+		var end=PLAN.endTs||'—';
+		var html='<p class="opacitymedium" style="font-size:12px">Demanda mensal total: <b>'+soma+' un</b> (qtd atual '+(totalQty||0)+' un). Cronograma: <b>'+tot+' h</b>. Término previsto: <b>'+end+'</b>.</p>';
+		if(soma>0 && tot>0){
+			var hPerUn=tot/soma;
+			html+='<p style="margin-top:6px">Média de <b>'+hPerUn.toFixed(2)+' h/un</b>.</p>';
+		}
+		wrap.innerHTML=html;
+	}
+	function novoItem(){
+		var ref=(document.getElementById('novo_ref').value||'').trim();
+		var label=(document.getElementById('novo_label').value||'').trim();
+		var qty=parseInt(document.getElementById('novo_qty').value||'0',10)||0;
+		var st=document.getElementById('novo_status');
+		if(!ref){if(st){st.textContent='Informe a referência.';}return;}
+		if(st){st.textContent='Criando item…';}
+		fetch('index.php?ajax=1&novo_item=1&ref='+encodeURIComponent(ref)+'&label='+encodeURIComponent(label)+'&qty='+qty,{method:'GET',credentials:'same-origin'})
+			.then(function(r){return r.json();})
+			.then(function(res){
+				if(res.ok){
+					PLAN=res.calc;
+					refreshCharts(PLAN);
+					renderSeq();
+					refresh(res.html);
+					renderDemandList();
+					renderDemandImpact();
+					document.getElementById('novo_ref').value='';
+					document.getElementById('novo_label').value='';
+					document.getElementById('novo_qty').value='100';
+					if(st){st.classList.add('pc-ok');st.textContent='Item criado ✓ — monte as etapas na aba Etapas.';}
+				}else{
+					if(st){st.textContent='Erro: '+(res.error||'desconhecido');}
+				}
+			})
+			.catch(function(e){if(st){st.textContent='Erro: '+e;}});
+	}
+	function delItem(mid){
+		if(!confirm('Excluir este item interno do planejamento? As etapas dele também serão removidas.')){return;}
+		fetch('index.php?ajax=1&del_item=1&id='+Math.abs(parseInt(mid,10)),{method:'GET',credentials:'same-origin'})
+			.then(function(r){return r.json();})
+			.then(function(res){
+				if(res.ok){
+					PLAN=res.calc;
+					refreshCharts(PLAN);
+					renderSeq();
+					refresh(res.html);
+					renderDemandList();
+					renderDemandImpact();
+				}
+			})
+			.catch(function(e){alert('Erro: '+e);});
+	}
 	function bindInputs(){
 		// Botões de salvar explícitos (salvamento automático DESATIVADO).
 		// Usa delegação para sobreviver à troca de innerHTML após salvar.
 		document.addEventListener('click',function(e){
 			var b=e.target&&e.target.closest?e.target.closest('button'):null;
-			if(!b||!b.id){return;}
+			if(!b){return;}
+			if(b.hasAttribute&&b.hasAttribute('data-del-mid')){delItem(b.getAttribute('data-del-mid'));return;}
+			if(!b.id){return;}
 			if(b.id==='btn_save_cfg'||b.id==='btn_save_seq'||b.id==='btn_save_etp'){manualSave();}
 			else if(b.id==='btn_reset_equipe'){
 				if(!confirm('Restaurar equipe padrão? As alterações não salvas serão perdidas.')){return;}
@@ -1138,6 +1205,12 @@ function pc_js()
 			else if(b.id==='btn_cron_exit'){
 				if(document.exitFullscreen){document.exitFullscreen();}
 				else if(document.webkitExitFullscreen){document.webkitExitFullscreen();}
+			}
+			else if(b.id==='btn_save_dem'){
+				saveDemand();
+			}
+			else if(b.id==='btn_novo_item'){
+				novoItem();
 			}
 		});
 		// marca "não salvo" ao editar configurações (sem salvar sozinho)

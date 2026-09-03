@@ -19,6 +19,7 @@ const PC_CONF_AUSENCIAS = 'PLANCONF_AUSENCIAS';
 const PC_CONF_SEQ      = 'PLANCONF_SEQ';
 const PC_CONF_STEPS    = 'PLANCONF_STEPS';
 const PC_CONF_EFICIENCIA = 'PLANCONF_EFICIENCIA';
+const PC_CONF_ITENS     = 'PLANCONF_ITENS';
 
 function pc_const_get($key, $default)
 {
@@ -74,6 +75,11 @@ function pc_equipe_get()
 function pc_tempos_get()
 {
 	return pc_json_get(PC_CONF_TEMPOS, array());
+}
+
+function pc_demanda_get()
+{
+	return pc_json_get('PLANCONF_DEMANDA', array());
 }
 
 function pc_ferias_get()
@@ -165,6 +171,22 @@ function pc_steps_set($steps)
 }
 
 /**
+ * Itens internos do planejamento (peças novas criadas na aba Demanda Mensal).
+ * Map id(int) => array(ref, label, qty). Não criam MO real no Dolibarr; são
+ * injetados no cronograma como MOs sintéticos (mid = -id) para aparecerem na
+ * sequência e terem etapas editáveis na aba Etapas.
+ */
+function pc_itens_get()
+{
+	return pc_json_get(PC_CONF_ITENS, array());
+}
+
+function pc_itens_set($itens)
+{
+	pc_const_set(PC_CONF_ITENS, json_encode($itens));
+}
+
+/**
  * Carrega MOs + tempos padr├úo (segundos). Retorna [mo, moWsSec, wsNames, wsTotalSec].
  * moWsSec: mo_id => array(ws_id => segundos); aplica overrides em horas.
  */
@@ -204,6 +226,22 @@ function pc_load_data()
 				'qty' => $r->mo_qty, 'status' => $r->status, 'ds' => $r->ds, 'de' => $r->de,
 			);
 		}
+	}
+
+	// Itens internos do planejamento: injetados como MOs sintéticos (mid = -id)
+	foreach (pc_itens_get() as $id => $it) {
+		$id = (int)$id;
+		if ($id <= 0) {
+			continue;
+		}
+		$mid = -$id;
+		$mo[$mid] = array(
+			'ref' => isset($it['ref']) ? trim($it['ref']) : ('ITEM-' . $id),
+			'prod' => '',
+			'label' => isset($it['label']) ? trim($it['label']) : '',
+			'qty' => (float)(isset($it['qty']) ? $it['qty'] : 0),
+			'status' => 1, 'ds' => null, 'de' => null,
+		);
 	}
 
 	// Etapas efetivas por MO (mescladas com sobreescrita custom do usu├írio)
@@ -932,12 +970,12 @@ function pc_calc($EQUIPE, $mo, $moWsSec, $wsNames, $wsTotalSec, $CAP_H_PER_DAY, 
 		'seqList' => $seqList,
 		'steps' => $moSteps,
 		'operators' => array_keys($EQUIPE),
+		'demanda' => pc_demanda_get(),
 		'wsLabels' => $wsNames,
 		'mats' => $mats,
 		'missingN' => $missN,
 		'missingCost' => round($missCost, 2),
 		'overdue' => $overdue,
-		'mo' => array_map(function($m) { return array('ref'=>$m['ref'],'label'=>$m['label'],'qty'=>$m['qty'],'status'=>$m['status'],'ds'=>$m['ds'],'de'=>$m['de']); }, $mo),
 		'err' => '',
 	);
 }

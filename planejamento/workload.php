@@ -17,10 +17,12 @@ $langs->load('main');
 $topmenu = 'mrp';
 $leftmenu = 'mrp';
 
-// ------- util ------- 
-function pc_sec2h($sec) {
-	return $sec / 3600.0;
-}
+// M4 (AUT-208): as DUAS telas do agendador tem de ler a MESMA politica de tempo
+// vazio, a MESMA equipe e a MESMA capacidade. Divergir aqui era o defeito: o
+// workload.php pulava a etapa e o sched.inc.php inventava 1,0 s/unidade -- e,
+// por baixo, o workload.php ainda tinha equipe e capacidade hardcoded.
+// pc_sec2h() tambem vem de la (nao redeclarar).
+require_once __DIR__ . '/sched.inc.php';
 
 // ------- fonte: MOs + consumo + tempo padrao (extrafield tempo, seg/unidade) -------
 $sql = "SELECT m.rowid AS mo_id, m.ref AS mo_ref, m.qty AS mo_qty, m.status,
@@ -62,9 +64,23 @@ foreach ($rows as $r) {
 
 $tmpSec = array(); // ws_id => sec per MO
 $moWsSec = array(); // mo_id => array(ws_id => sec)
+$semTempo = array(); // mo_id => array(wid, ...) etapas sem tempo (M4 = 'skip')
 foreach ($rows as $r) {
-	if (!$r->ws_id || !$r->tempo) {
+	if (!$r->ws_id) {
 		continue;
+	}
+	// M4 (AUT-208): mesma politica do sched.inc.php, lida da MESMA configuracao.
+	// 'skip' -> a etapa nao gera carga. 'unit' -> 1,0 s/unidade (legado, inventado).
+	if (!$r->tempo || (float)$r->tempo <= 0) {
+		if (pc_tempo_vazio_get() === 'unit') {
+			$r->tempo = 1.0;
+		} else {
+			if (!isset($semTempo[$r->mo_id])) {
+				$semTempo[$r->mo_id] = array();
+			}
+			$semTempo[$r->mo_id][] = (int)$r->ws_id;
+			continue;
+		}
 	}
 	$sec = $r->tempo * $r->mo_qty;
 	if (!isset($moWsSec[$r->mo_id])) {
@@ -114,13 +130,12 @@ $nDays = (int)(($dayEnd - $dayStart) / 86400) + 1;
 
 $CAP_H_PER_DAY = 12600 / 3600; // 3,5 h por turno (planilha Tempos de Fabricacao, fallback p/ posto sem equipe)
 
-// Equipe (aba "Equipe" da planilha): operador => horas/dia disponiveis e postos habilitados (rowid workstation)
-$EQUIPE = array(
-	'Miguel' => array('h_dia' => 4.0, 'postos' => array(1, 2, 6, 8)),   // Furadeira, Lixadeira, Torno, Rebitadeira
-	'Kauan'  => array('h_dia' => 4.0, 'postos' => array(1, 2, 3, 4, 5, 8)), // Furadeira, Lixadeira, Autrobot, Decapagem, Tamboriador, Rebitadeira
-	'Saulo'  => array('h_dia' => 4.5, 'postos' => array(7)),            // Solda Manual M1
-	'Marcio' => array('h_dia' => 9.0, 'postos' => array(7)),            // Solda Manual M1
-);
+// Equipe (aba "Equipe" da planilha / llx_const PLANCONF_EQUIPE): operador => horas/dia
+// disponiveis e postos habilitados (rowid workstation).
+// M4 (AUT-208): vem da MESMA fonte do agendador. Antes era hardcoded aqui
+// (Miguel/Kauan 4,0 h) enquanto o banco dizia 3,5 h -- as duas telas discordavam
+// de capacidade E de tempo ao mesmo tempo.
+$EQUIPE = pc_equipe_get();
 
 // capacidade por posto = soma das horas/dia dos operadores habilitados
 $wsCapDay = array();
@@ -185,6 +200,22 @@ if (empty($mo)) {
 	print 'Nenhuma ordem de fabricação encontrada.';
 	llxFooter();
 	exit;
+}
+
+// M4 (AUT-208): as duas telas agora omitem a etapa sem tempo e as duas DIZEM que
+// omitiram. Sem isso, "sem tempo" e "tempo 1,0 s" produzem o mesmo cronograma
+// visivel e nao ha como saber qual dos dois o chefe de turno esta vendo.
+$nSemTempo = array_sum(array_map('count', (array)$semTempo));
+if ($nSemTempo > 0) {
+	$det = array();
+	foreach ($semTempo as $mid => $wids) {
+		$det[] = (isset($mo[$mid]['ref']) ? $mo[$mid]['ref'] : ('MO#'.$mid)).' (posto '.implode(',', $wids).')';
+	}
+	print '<div class="notif warning" style="margin-bottom:10px"><b>'.$nSemTempo.' etapa(s) de BOM sem tempo cadastrado</b> — ';
+	print (pc_tempo_vazio_get() === 'unit')
+		? 'receberam <b>1,0 s/unidade</b> (política M4 = 1,0 s). Esse valor é <b>inventado</b>, não medido.'
+		: 'foram <b>omitidas</b> da carga (política M4 = pular). A carga abaixo é a real.';
+	print ' <span class="opacitymedium">'.htmlspecialchars(implode(' · ', $det), ENT_QUOTES).'</span></div>';
 }
 
 // ---------- 1) consolidado por maquina ----------
@@ -356,12 +387,8 @@ foreach ($moWsSec as $mid => $wslist) {
 		$i++;
 	}
 }
-function pc_mch($op, $t) {
-	if ($t['wid'] == 3 && ($op == 'Saulo' || $op == 'Marcio')) {
-		return 7;
-	}
-	return $t['wid'];
-}
+// pc_mch() vem do sched.inc.php (M4/AUT-208). A copia local aqui era identica e
+// colidia na hora do require: "Cannot redeclare pc_mch()".
 $SHARED = array(1 => 1, 2 => 1, 7 => 1);
 
 $bDays = array();

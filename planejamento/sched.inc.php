@@ -12,6 +12,7 @@ function pc_sec2h($sec)
 
 const PC_CONF_EQUIPE   = 'PLANCONF_EQUIPE';
 const PC_CONF_TEMPOS   = 'PLANCONF_TEMPOS';
+const PC_CONF_TEMPO_VAZIO = 'PLANCONF_TEMPO_VAZIO';
 const PC_CONF_FERIAS   = 'PLANCONF_FERIAS';
 const PC_CONF_FIMSAT   = 'PLANCONF_FIMSAT';
 const PC_CONF_FIMSUN   = 'PLANCONF_FIMSUN';
@@ -67,6 +68,25 @@ function pc_equipe_get()
 		'Marcio' => array('h_dia' => 9.0, 'postos' => array(7)),
 	);
 	return pc_json_get(PC_CONF_EQUIPE, $def);
+}
+
+/**
+ * M4 (AUT-208): o que fazer com etapa SEM tempo cadastrado (pe.tempo vazio / <= 0).
+ *
+ * 'skip' -> a etapa nao gera carga. E o que o workload.php ja fazia.
+ * 'unit' -> usa 1,0 s por unidade. E o comportamento legado do sched.inc.php
+ *           e INVENTA duracao para dado que nao existe.
+ *
+ * Principio do AUT-66: "tempo padrao inventado e pior que tempo vazio".
+ * Padrao = 'skip'. A decisao de negocio M4 do AUT-66 vira um valor de
+ * configuracao (llx_const), nao um edit de codigo: trocar e um UPDATE.
+ *
+ * Os DOIS consumidores (workload.php e sched.inc.php) leem esta mesma funcao.
+ * Se divergirem de novo, e porque alguem nao passou por aqui.
+ */
+function pc_tempo_vazio_get()
+{
+	return strtolower(trim(pc_const_get(PC_CONF_TEMPO_VAZIO, 'skip'))) === 'unit' ? 'unit' : 'skip';
 }
 
 /**
@@ -247,14 +267,27 @@ function pc_load_data()
 	// Etapas efetivas por MO (mescladas com sobreescrita custom do usu├írio)
 	$custom = pc_steps_get();
 	$moSteps = array();  // mo_id => array({wid, sec, op?}) em ordem
+	$semTempo = array();  // mo_id => array(wid, ...) etapas da BOM SEM pe.tempo (nao geram carga)
 	// 1) etapas da BOM (mantendo a ordem de position)
+	$semTempoPolicy = pc_tempo_vazio_get();
 	foreach ($rows as $r) {
 		if (!$r->ws_id) {
 			continue;
 		}
 		$tempo = (float)$r->tempo;
 		if ($tempo <= 0) {
-			$tempo = 1.0; // fallback se sem tempo cadastrado
+			// M4 (AUT-208): sem tempo cadastrado NAO vira tempo inventado.
+			if ($semTempoPolicy === 'unit') {
+				$tempo = 1.0; // comportamento legado, so com M4 = 'unit' na configuracao
+			} else {
+				// M4 = 'skip': a etapa nao entra na carga. Fica registrada para a tela
+				// poder dizer o que ficou de fora, em vez de sumir calado.
+				if (!isset($semTempo[$r->mo_id])) {
+					$semTempo[$r->mo_id] = array();
+				}
+				$semTempo[$r->mo_id][] = (int)$r->ws_id;
+				continue;
+			}
 		}
 		if (!isset($moSteps[$r->mo_id])) {
 			$moSteps[$r->mo_id] = array();
@@ -285,6 +318,27 @@ function pc_load_data()
 				$clean[] = array('wid' => $wid, 'spc' => $spc, 'sec' => $spc * $qty, 'op' => (isset($st['op']) ? trim($st['op']) : ''), 'buy' => $buy ? 1 : 0);
 			}
 			$moSteps[$mid] = $clean;
+		}
+	}
+	// 2b) reconcilia o registro de "sem tempo": se a MO tem etapas custom (2) ou
+	//     override de tempo (3), o posto volta a ter carga e nao e mais um buraco.
+	foreach ($semTempo as $mid => $wids) {
+		$efetivos = array();
+		if (isset($moSteps[$mid])) {
+			foreach ($moSteps[$mid] as $st) {
+				$efetivos[(int)$st['wid']] = 1;
+			}
+		}
+		$sobra = array();
+		foreach ($wids as $wid) {
+			if (!isset($efetivos[$wid])) {
+				$sobra[] = $wid;
+			}
+		}
+		if (empty($sobra)) {
+			unset($semTempo[$mid]);
+		} else {
+			$semTempo[$mid] = array_values(array_unique($sobra));
 		}
 	}
 	// 3) overrides de tempo por 'mid:wid' (horas)
@@ -349,7 +403,7 @@ function pc_load_data()
 	}
 	unset($listSteps, $st);
 
-	return array($mo, $moWsSec, $wsNames, $wsTotalSec, $moSteps, $moStepOp);
+	return array($mo, $moWsSec, $wsNames, $wsTotalSec, $moSteps, $moStepOp, $semTempo);
 }
 
 /**
@@ -793,7 +847,7 @@ function pc_schedule($EQUIPE, $moWsSec, $dayStart, $dayEnd, $CAP_H_PER_DAY, $AUS
 /**
  * Monta o payload JSON consumido pelo frontend.
  */
-function pc_calc($EQUIPE, $mo, $moWsSec, $wsNames, $wsTotalSec, $CAP_H_PER_DAY, $moSteps = array(), $moStepOp = array(), $EF = 1.0)
+function pc_calc($EQUIPE, $mo, $moWsSec, $wsNames, $wsTotalSec, $CAP_H_PER_DAY, $moSteps = array(), $moStepOp = array(), $EF = 1.0, $semTempo = array())
 {
 	list($dayStart, $dayEnd) = pc_window($mo);
 	$AUS = pc_ausencias_get();
@@ -969,6 +1023,11 @@ function pc_calc($EQUIPE, $mo, $moWsSec, $wsNames, $wsTotalSec, $CAP_H_PER_DAY, 
 		'seq' => $SEQ,
 		'seqList' => $seqList,
 		'steps' => $moSteps,
+		// M4 (AUT-208): etapas da BOM sem pe.tempo. Com M4='skip' elas NAO geram
+		// carga -- e o plano tem de dizer isso, em vez de planear menos e calar.
+		'semTempo' => $semTempo,
+		'semTempoN' => array_sum(array_map('count', (array) $semTempo)),
+		'semTempoPolicy' => pc_tempo_vazio_get(),
 		'operators' => array_keys($EQUIPE),
 		'demanda' => pc_demanda_get(),
 		'wsLabels' => $wsNames,

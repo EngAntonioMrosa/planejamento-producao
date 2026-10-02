@@ -37,7 +37,7 @@ if (isset($_GET['reset'])) {
 	exit;
 }
 
-list($mo, $moWsSec, $wsNames, $wsTotalSec, $moSteps, $moStepOp) = pc_load_data();
+list($mo, $moWsSec, $wsNames, $wsTotalSec, $moSteps, $moStepOp, $semTempo) = pc_load_data();
 $EQUIPE = pc_equipe_get();
 
 // ---------- AJAX: salvar demanda mensal ----------
@@ -77,8 +77,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['demanda'])) {
 		pc_itens_set($itens);
 	}
 	// recalcula com a nova demanda
-	list($mo, $moWsSec, $wsNames, $wsTotalSec, $moSteps, $moStepOp) = pc_load_data();
-	$C = pc_calc($EQUIPE, $mo, $moWsSec, $wsNames, $wsTotalSec, $CAP_H_PER_DAY, $moSteps, $moStepOp, pc_eficiencia_get() / 100);
+	list($mo, $moWsSec, $wsNames, $wsTotalSec, $moSteps, $moStepOp, $semTempo) = pc_load_data();
+	$C = pc_calc($EQUIPE, $mo, $moWsSec, $wsNames, $wsTotalSec, $CAP_H_PER_DAY, $moSteps, $moStepOp, pc_eficiencia_get() / 100, $semTempo);
 	header('Content-Type: application/json; charset=utf-8');
 	echo json_encode(array('ok' => true, 'calc' => $C, 'html' => pc_html($C)));
 	$db->close();
@@ -117,8 +117,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['novo_item'])) 
 		$itens[$id] = array('ref' => $ref, 'label' => $label, 'qty' => $qty);
 		pc_itens_set($itens);
 	}
-	list($mo, $moWsSec, $wsNames, $wsTotalSec, $moSteps, $moStepOp) = pc_load_data();
-	$C = pc_calc($EQUIPE, $mo, $moWsSec, $wsNames, $wsTotalSec, $CAP_H_PER_DAY, $moSteps, $moStepOp, pc_eficiencia_get() / 100);
+	list($mo, $moWsSec, $wsNames, $wsTotalSec, $moSteps, $moStepOp, $semTempo) = pc_load_data();
+	$C = pc_calc($EQUIPE, $mo, $moWsSec, $wsNames, $wsTotalSec, $CAP_H_PER_DAY, $moSteps, $moStepOp, pc_eficiencia_get() / 100, $semTempo);
 	header('Content-Type: application/json; charset=utf-8');
 	echo json_encode(array('ok' => $ok, 'error' => $error, 'calc' => $C, 'html' => $ok ? pc_html($C) : ''));
 	$db->close();
@@ -140,8 +140,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['del_item'])) {
 			pc_steps_set($steps);
 		}
 	}
-	list($mo, $moWsSec, $wsNames, $wsTotalSec, $moSteps, $moStepOp) = pc_load_data();
-	$C = pc_calc($EQUIPE, $mo, $moWsSec, $wsNames, $wsTotalSec, $CAP_H_PER_DAY, $moSteps, $moStepOp, pc_eficiencia_get() / 100);
+	list($mo, $moWsSec, $wsNames, $wsTotalSec, $moSteps, $moStepOp, $semTempo) = pc_load_data();
+	$C = pc_calc($EQUIPE, $mo, $moWsSec, $wsNames, $wsTotalSec, $CAP_H_PER_DAY, $moSteps, $moStepOp, pc_eficiencia_get() / 100, $semTempo);
 	header('Content-Type: application/json; charset=utf-8');
 	echo json_encode(array('ok' => true, 'calc' => $C, 'html' => pc_html($C)));
 	$db->close();
@@ -265,9 +265,9 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['cfg'])) {
 		pc_steps_set($cleanSteps);
 	}
 	// recalcula (MO/tempos podem ter mudado via override)
-	list($mo, $moWsSec, $wsNames, $wsTotalSec, $moSteps, $moStepOp) = pc_load_data();
+	list($mo, $moWsSec, $wsNames, $wsTotalSec, $moSteps, $moStepOp, $semTempo) = pc_load_data();
 
-	$C = pc_calc($EQUIPE, $mo, $moWsSec, $wsNames, $wsTotalSec, $CAP_H_PER_DAY, $moSteps, $moStepOp, pc_eficiencia_get() / 100);
+	$C = pc_calc($EQUIPE, $mo, $moWsSec, $wsNames, $wsTotalSec, $CAP_H_PER_DAY, $moSteps, $moStepOp, pc_eficiencia_get() / 100, $semTempo);
 	// re-carrega o que veio do POST (ex.: h_dia novo) e devolve
 	header('Content-Type: application/json; charset=utf-8');
 	echo json_encode(array('calc' => $C, 'html' => pc_html($C)));
@@ -276,7 +276,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['cfg'])) {
 }
 
 // ---------- render comum ----------
-	$C = pc_calc($EQUIPE, $mo, $moWsSec, $wsNames, $wsTotalSec, $CAP_H_PER_DAY, $moSteps, $moStepOp, pc_eficiencia_get() / 100);
+	$C = pc_calc($EQUIPE, $mo, $moWsSec, $wsNames, $wsTotalSec, $CAP_H_PER_DAY, $moSteps, $moStepOp, pc_eficiencia_get() / 100, $semTempo);
 
 	// ---------- export CSV do cronograma ----------
 if (isset($_GET['export']) && $_GET['export'] === 'sched') {
@@ -1242,6 +1242,19 @@ function pc_html($C)
 	$cards = '';
 	if ($C['overdue']) {
 		$cards .= '<div class="pc-warn">⚠ Atraso: o cronograma termina em ' . $C['endTs'] . ', após o prazo de ' . $C['dayEnd'] . '. Ajuste equipe, tempos ou permita fim de semana.</div>';
+	}
+	// M4 (AUT-208): etapa sem tempo cadastrado nao entra na carga. O plano tem de
+	// dizer isso -- senao ele planeja menos e nao avisa (que era o defeito do 1,0 s).
+	if (!empty($C['semTempoN'])) {
+		$det = array();
+		foreach ((array) $C['semTempo'] as $mid => $wids) {
+			$det[] = (isset($C['moTimes'][$mid]['ref']) ? $C['moTimes'][$mid]['ref'] : ('MO#' . $mid)) . ' (posto ' . implode(',', $wids) . ')';
+		}
+		$cards .= '<div class="pc-warn">⚠ ' . $C['semTempoN'] . ' etapa(s) de BOM <b>sem tempo cadastrado</b> '
+			. ($C['semTempoPolicy'] === 'skip'
+				? 'foram <b>omitidas</b> da carga (política M4 = pular). O cronograma abaixo é o real.'
+				: 'receberam <b>1,0 s/unidade</b> (política M4 = 1,0 s) — valor inventado, não medido.')
+			. ' <span class="opacitymedium">' . htmlspecialchars(implode(' · ', $det), ENT_QUOTES) . '</span></div>';
 	}
 	$cards .= '<div class="pc-kpis">';
 	$cards .= '<div class="kpi"><div class="v">' . $C['totSched'] . ' h</div><div class="l">Total escalonado</div></div>';
